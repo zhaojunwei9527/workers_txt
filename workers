@@ -1,0 +1,435 @@
+const YOUR_PASSWORD = "mySecretPassword"; // 设置你的密码
+
+addEventListener('fetch', event => {
+    event.respondWith(handleRequest(event.request));
+});
+
+async function handleRequest(request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    if (path === "/") {
+        // 显示登录页面
+        return new Response(await renderLoginHTML(), {
+            headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+        });
+    }
+
+    if (path === "/edit" && request.method === "POST") {
+        // 验证密码并显示笔记标题列表
+        const formData = await request.formData();
+        const password = formData.get("password");
+
+        if (password !== YOUR_PASSWORD) {
+            return new Response(await renderLoginHTML("密码错误，请重试！"), {
+                headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+            });
+        }
+
+        return new Response(await renderNoteListHTML(), {
+            headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+        });
+    }
+
+    if (path.startsWith("/edit-note/") && request.method === "GET") {
+        // 显示单个笔记的编辑页面
+        const noteTitle = decodeURIComponent(path.split("/edit-note/")[1]);
+        const note = await txtkv.get(noteTitle) || "";
+        return new Response(await renderEditorHTML(noteTitle, note), {
+            headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+        });
+    }
+
+    if (path.startsWith("/save-note/") && request.method === "POST") {
+        // 保存单个笔记
+        const noteTitle = decodeURIComponent(path.split("/save-note/")[1]);
+        const formData = await request.formData();
+        const note = formData.get("note");
+
+        // 以第一行为标题
+        const lines = note.split('\n');
+        const title = lines[0] || "无标题";
+
+        await txtkv.put(title, note); // 保存到 KV
+
+        // 返回笔记列表页面并强制刷新缓存
+        return new Response(await renderNoteListHTML(), {
+            headers: {
+                'Content-Type': 'text/html; charset=UTF-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate', // 强制刷新缓存
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            },
+        });
+    }
+
+    if (path.startsWith("/delete-note/") && request.method === "POST") {
+        // 删除笔记
+        const noteTitle = decodeURIComponent(path.split("/delete-note/")[1]);
+        console.log(`Deleting note: ${noteTitle}`); // 添加日志
+        await txtkv.delete(noteTitle); // 删除 KV 中的笔记
+        console.log(`Note ${noteTitle} deleted`); // 添加日志
+
+        // 返回笔记列表页面并强制刷新缓存
+        return new Response(await renderNoteListHTML(), {
+            headers: {
+                'Content-Type': 'text/html; charset=UTF-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate', // 强制刷新缓存
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            },
+        });
+    }
+
+    if (path === "/new-note" && request.method === "GET") {
+        // 显示新建笔记页面
+        return new Response(await renderNewNoteHTML(), {
+            headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+        });
+    }
+
+    if (path === "/create-note" && request.method === "POST") {
+        // 创建新笔记
+        const formData = await request.formData();
+        const noteContent = formData.get("content");
+
+        // 以第一行为标题
+        const lines = noteContent.split('\n');
+        const title = lines[0] || "无标题";
+
+        await txtkv.put(title, noteContent); // 保存到 KV
+
+        // 返回创建成功页面并跳转回笔记列表
+        return new Response(await renderSuccessHTML(), {
+            headers: {
+                'Content-Type': 'text/html; charset=UTF-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate', // 强制刷新缓存
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            },
+        });
+    }
+
+    return new Response("Not found", { status: 404 });
+}
+
+// 登录页面的HTML
+async function renderLoginHTML(errorMessage = "") {
+    return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <title>登录</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .login-container {
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                text-align: center;
+                width: 300px;
+            }
+            input, button {
+                width: 100%;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+                border: 1px solid #cccccc;
+                box-sizing: border-box;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+            .error-message {
+                color: red;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h2>登录</h2>
+            ${errorMessage ? `<p class="error-message">${errorMessage}</p>` : ""}
+            <form action="/edit" method="post">
+                <input type="password" name="password" placeholder="输入密码" required>
+                <button type="submit">登录</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    `;
+}
+
+// 笔记列表页面的HTML
+async function renderNoteListHTML() {
+    const keys = await txtkv.list();
+    const notes = keys.keys.map(key => key.name).sort(); // 排序笔记标题
+
+    let noteListHtml = notes.map(title => `
+        <div>
+            <h3>${title}</h3>
+            <a href="/edit-note/${encodeURIComponent(title)}">编辑</a>
+            <button onclick="handleDelete('${encodeURIComponent(title)}')">删除</button>
+        </div>
+    `).join('');
+
+    return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <title>笔记列表</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+            .note-list-container {
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                margin-top: 20px;
+                width: 600px;
+            }
+            button {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #c82333;
+            }
+            .links {
+                margin-top: 20px;
+                text-align: center;
+            }
+            .links a {
+                text-decoration: none;
+                color: #007bff;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="note-list-container">
+            <h2>笔记列表</h2>
+            ${noteListHtml}
+            <div class="links">
+                <a href="/new-note">新建笔记</a>
+            </div>
+        </div>
+        <script>
+            function handleDelete(title) {
+                if (confirm('确定要删除这个笔记吗？')) {
+                    fetch('/delete-note/' + title, { method: 'POST' })
+                        .then(response => {
+                            if (response.ok) {
+                                // 强制刷新页面
+                                window.location.reload(true); // 添加 true 参数以强制刷新
+                            } else {
+                                alert('删除失败');
+                            }
+                        });
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `;
+}
+
+// 编辑笔记页面的HTML
+async function renderEditorHTML(noteTitle, noteContent) {
+    return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <title>编辑笔记</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height:
+                height: 100vh;
+                margin: 0;
+            }
+            .editor-container {
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                text-align: center;
+                width: 600px;
+            }
+            textarea, button {
+                width: 100%;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+                border: 1px solid #cccccc;
+                box-sizing: border-box;
+            }
+            textarea {
+                resize: none;
+                height: 300px;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="editor-container">
+            <h2>编辑笔记</h2>
+            <form action="/save-note/${encodeURIComponent(noteTitle)}" method="post">
+                <textarea name="note" required>${noteContent}</textarea>
+                <button type="submit">保存</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    `;
+}
+
+// 新建笔记页面的HTML
+async function renderNewNoteHTML() {
+    return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <title>新建笔记</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .new-note-container {
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                text-align: center;
+                width: 600px;
+            }
+            textarea, button {
+                width: 100%;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+                border: 1px solid #cccccc;
+                box-sizing: border-box;
+            }
+            textarea {
+                resize: none;
+                height: 300px;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="new-note-container">
+            <h2>新建笔记</h2>
+            <form action="/create-note" method="post">
+                <textarea name="content" placeholder="输入笔记内容" required></textarea>
+                <button type="submit">创建笔记</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    `;
+}
+
+// 创建成功页面的HTML
+async function renderSuccessHTML() {
+    return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <title>创建成功</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .success-container {
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                text-align: center;
+                width: 300px;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 10px;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="success-container">
+            <h2>创建成功</h2>
+            <p>您的笔记已成功创建。</p>
+            <button onclick="window.location.href='/'">返回主页面</button>
+        </div>
+    </body>
+    </html>
+    `;
+}
